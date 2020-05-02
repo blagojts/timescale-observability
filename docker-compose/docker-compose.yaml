@@ -1,0 +1,104 @@
+version: "3.3"
+services:
+  # TimescaleDB service configuration
+  timescaledb:
+    image: timescale/timescaledb:latest-pg12
+    environment:
+      # Password for the postgres super user
+      POSTGRES_PASSWORD: &pgPass postgres
+      # Username, password and schema to create for
+      # grafana to use to store its datafor it's database
+      # Used by script in docker-entrypoint-initdb.d
+      # See: https://github.com/docker-library/docs/blob/master/postgres/README.md#initialization-scripts
+      GRAFANA_USER: &grafanaDBUser grafana
+      GRAFANA_PASSWORD: &grafanaDBPass grafana
+      GRAFANA_SCHEMA: grafana
+    # Ports TimescaleDB should expose to host
+    ports:
+      - 5432:5432
+    # Scripts to run on database startup
+    # These scripts are only run once when the data directory is created
+    # If a script fails, it will restart the container, but will not
+    # be run again (since data directory will this time exist)
+    volumes:
+      # Script to create the user grafana will use to store it's data
+      # so the grafana container can be stateless
+      # See: https://github.com/docker-library/docs/blob/master/postgres/README.md#initialization-scripts
+      - ./init-grafana-user-in-timescaledb.sh:/docker-entrypoint-initdb.d/004_init_grafana_user.sh
+
+  # Timescale Prometheus Connector service configuration
+  timescale-prometheus-connector:
+    image: timescale/timescale-prometheus:0.1.0-alpha.2
+    # Connection options can be set as ENV vars
+    # For now superuser is required
+    environment:
+      TS_PROM_DB_NAME: &metricsDB postgres
+      TS_PROM_DB_PASSWORD: *pgPass
+      TS_PROM_DB_SSL_MODE: disable
+      TS_PROM_DB_HOST: timescaledb
+    # Connector listens on port 9201
+    # ports:
+    #   - 9201:9201
+    # Will wait for database container, but in case db is up,
+    # but not listening yet, it will fail and restart itself
+    depends_on:
+      - timescaledb
+    restart: always
+
+  # Prometheus service configuration
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - 9090:9090
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    # Scrape and remote config is mounted from ./prometheus.yaml
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - cadvisor
+
+  # cAdvisor service configuration
+  # Analyzes resource usage and performance characteristics of running containers
+  cadvisor:
+    image: google/cadvisor:latest
+    # cAdvisor has it's own dashboard accessible on port 8080
+    # ports:
+    #   - 8080:8080
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: always
+  # Grafana service configuration
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - 3000:3000
+    depends_on:
+      - timescaledb
+    environment:
+      # We configure grafana to store it's data in TimescaleDB
+      # Instead of a slqlite file
+      # See ./init-grafana-in-timescaledb.sh for how
+      # this user will be created on dbInit of the TimescaleDB container.
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: timescaledb
+      GF_DATABASE_NAME: postgres
+      GF_DATABASE_USER: *grafanaDBUser
+      GF_DATABASE_PASSWORD: *grafanaDBPass
+      # Default password for 'admin' user
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      # Username, password and database to be used for
+      # the provisioned TimescaleDB data source
+      # See ./grafana-datasources.yaml
+      DATASOURCE_TIMESCALE_USER: postgres
+      DATASOURCE_TIMESCALE_PASSWORD: *pgPass
+      DATASOURCE_TIMESCALE_DB: *metricsDB
+    volumes:
+      # Provisioned data sources for Prometheus and TimescaleDB
+      # Will automatically show up in Grafana
+      # Details in ./grafana-datasources.yaml
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    restart: always

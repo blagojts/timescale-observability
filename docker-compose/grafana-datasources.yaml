@@ -1,0 +1,29 @@
+apiVersion: 1
+
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: TimescaleDB
+    orgId: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    access: proxy
+  - name: TimescaleDB
+    type: postgres
+    url: timescaledb
+    isDefault: false
+    access: proxy
+    database: $DATASOURCE_TIMESCALE_DB
+    editable: true
+    user: $DATASOURCE_TIMESCALE_USER
+    secureJsonData:
+      password: $DATASOURCE_TIMESCALE_PASSWORD
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1000
+      timescaledb: true
